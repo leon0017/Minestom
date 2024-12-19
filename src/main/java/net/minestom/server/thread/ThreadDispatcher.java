@@ -1,6 +1,8 @@
 package net.minestom.server.thread;
 
+import net.minestom.server.ServerFlag;
 import net.minestom.server.Tickable;
+import net.minestom.server.instance.InstanceContainer;
 import org.jctools.queues.MessagePassingQueue;
 import org.jctools.queues.MpscUnboundedArrayQueue;
 import org.jetbrains.annotations.ApiStatus;
@@ -8,7 +10,9 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Unmodifiable;
 
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntFunction;
 
 /**
@@ -27,6 +31,7 @@ import java.util.function.IntFunction;
 public final class ThreadDispatcher<P> {
     private final ThreadProvider<P> provider;
     private final List<TickThread> threads;
+    private final IntFunction<? extends TickThread> threadGenerator;
 
     // Partition -> dispatching context
     // Defines how computation is dispatched to the threads
@@ -39,13 +44,22 @@ public final class ThreadDispatcher<P> {
     // Requests consumed at the end of each tick
     private final MessagePassingQueue<DispatchUpdate<P>> updates = new MpscUnboundedArrayQueue<>(1024);
 
+    // TODO: comment
+    private int instanceBasedNextThreadCounter = 0;
+
+    // TODO: pass instance based thread count in threadcount and use it there
     private ThreadDispatcher(ThreadProvider<P> provider, int threadCount,
                              @NotNull IntFunction<? extends TickThread> threadGenerator) {
+        this.threadGenerator = threadGenerator;
         this.provider = provider;
-        TickThread[] threads = new TickThread[threadCount];
-        Arrays.setAll(threads, threadGenerator);
-        this.threads = List.of(threads);
-        this.threads.forEach(Thread::start);
+        if (ServerFlag.PER_INSTANCE_DISPATCHER_THREADS > 0) {
+            threads = new CopyOnWriteArrayList<>();
+        } else {
+            TickThread[] threads = new TickThread[threadCount];
+            Arrays.setAll(threads, threadGenerator);
+            this.threads = List.of(threads);
+            this.threads.forEach(Thread::start);
+        }
     }
 
     /**
@@ -113,6 +127,8 @@ public final class ThreadDispatcher<P> {
                 case DispatchUpdate.ElementUpdate<P> elementUpdate ->
                         processUpdatedElement(elementUpdate.tickable(), elementUpdate.partition());
                 case DispatchUpdate.ElementRemove<P> elementRemove -> processRemovedElement(elementRemove.tickable());
+                case DispatchUpdate.InstanceBasedThreadSetup<P> instanceBasedThreadSetup ->
+                        processInstanceBasedThreadSetup(instanceBasedThreadSetup.instanceContainer());
                 case null, default ->
                         throw new IllegalStateException("Unknown update type: " +
                                 (update == null ? "null" : update.getClass().getSimpleName()));
@@ -210,6 +226,13 @@ public final class ThreadDispatcher<P> {
     }
 
     /**
+     * TODO: comment
+     */
+    public void setupInstanceBasedThread(@NotNull InstanceContainer instanceContainer) {
+        signalUpdate(new DispatchUpdate.InstanceBasedThreadSetup<>(instanceContainer));
+    }
+
+    /**
      * Shutdowns all the {@link TickThread tick threads}.
      * <p>
      * Action is irreversible.
@@ -278,6 +301,26 @@ public final class ThreadDispatcher<P> {
         }
     }
 
+    private void processInstanceBasedThreadSetup(@NotNull InstanceContainer instanceContainer) {
+        assert ServerFlag.PER_INSTANCE_DISPATCHER_THREADS > 0; // Method should only be called when using per instance dispatcher threads
+        assert instanceContainer.instanceBasedThreadId.get() != -1; // Already setup
+
+        if (instanceBasedNextThreadCounter == 0 || instanceBasedNextThreadCounter % ServerFlag.PER_INSTANCE_DISPATCHER_THREADS == 0) {
+            int index = threads.size();
+            instanceContainer.instanceBasedThreadId.set(index);
+            TickThread tickThread = threadGenerator.apply(index);
+            threads.add(tickThread);
+            tickThread.start();
+            System.out.println("CREATED TICK THREAD #" + instanceContainer.instanceBasedThreadId.get());
+        } else {
+            // Assign the instance to the most recently created thread
+            instanceContainer.instanceBasedThreadId.set(threads.size() - 1);
+            System.out.println("SETTING LAST #" + instanceContainer.instanceBasedThreadId.get());
+        }
+
+        instanceBasedNextThreadCounter++;
+    }
+
     /**
      * A data structure which may contain {@link Tickable}s, and is assigned a single {@link TickThread}.
      */
@@ -314,7 +357,8 @@ public final class ThreadDispatcher<P> {
     @ApiStatus.Internal
     sealed interface DispatchUpdate<P> permits
             DispatchUpdate.PartitionLoad, DispatchUpdate.PartitionUnload,
-            DispatchUpdate.ElementUpdate, DispatchUpdate.ElementRemove {
+            DispatchUpdate.ElementUpdate, DispatchUpdate.ElementRemove,
+            DispatchUpdate.InstanceBasedThreadSetup {
         record PartitionLoad<P>(@NotNull P partition) implements DispatchUpdate<P> {
         }
 
@@ -325,6 +369,9 @@ public final class ThreadDispatcher<P> {
         }
 
         record ElementRemove<P>(@NotNull Tickable tickable) implements DispatchUpdate<P> {
+        }
+
+        record InstanceBasedThreadSetup<P>(@NotNull InstanceContainer instanceContainer) implements DispatchUpdate<P> {
         }
     }
 }

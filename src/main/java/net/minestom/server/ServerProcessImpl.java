@@ -139,7 +139,7 @@ final class ServerProcessImpl implements ServerProcess {
 
         this.server = new Server(packetParser);
 
-        this.dispatcher = ThreadDispatcher.of(ThreadProvider.counter(), ServerFlag.DISPATCHER_THREADS);
+        this.dispatcher = ThreadDispatcher.of(ServerFlag.PER_INSTANCE_DISPATCHER_THREADS > 0 ? ThreadProvider.instanceBased() : ThreadProvider.counter(), ServerFlag.DISPATCHER_THREADS);
         this.ticker = new TickerImpl();
     }
 

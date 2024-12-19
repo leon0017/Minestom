@@ -1,6 +1,7 @@
 package net.minestom.server.instance;
 
 import net.minestom.server.MinecraftServer;
+import net.minestom.server.ServerFlag;
 import net.minestom.server.entity.Player;
 import net.minestom.server.event.EventDispatcher;
 import net.minestom.server.event.instance.InstanceRegisterEvent;
@@ -167,6 +168,9 @@ public final class InstanceManager {
         instance.setRegistered(true);
         this.instances.add(instance);
         var dispatcher = MinecraftServer.process().dispatcher();
+        if (ServerFlag.PER_INSTANCE_DISPATCHER_THREADS > 0 && instance instanceof InstanceContainer instanceContainer) {
+            dispatcher.setupInstanceBasedThread(instanceContainer);
+        }
         instance.getChunks().forEach(dispatcher::createPartition);
         InstanceRegisterEvent event = new InstanceRegisterEvent(instance);
         EventDispatcher.call(event);

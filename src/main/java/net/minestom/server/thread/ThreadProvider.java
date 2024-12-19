@@ -1,5 +1,7 @@
 package net.minestom.server.thread;
 
+import net.minestom.server.instance.Chunk;
+import net.minestom.server.instance.InstanceContainer;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
@@ -16,6 +18,14 @@ public interface ThreadProvider<T> {
             public int findThread(@NotNull T partition) {
                 return counter.getAndIncrement();
             }
+        };
+    }
+
+    static <T> @NotNull ThreadProvider<T> instanceBased() {
+        return partition -> {
+            Chunk chunk = (Chunk) partition;
+            InstanceContainer instanceContainer = (InstanceContainer) chunk.getInstance();
+            return instanceContainer.instanceBasedThreadId.get();
         };
     }
 

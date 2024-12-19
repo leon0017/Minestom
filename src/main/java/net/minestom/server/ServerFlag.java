@@ -19,6 +19,7 @@ public final class ServerFlag {
     public static final int ENTITY_VIEW_DISTANCE = intProperty("minestom.entity-view-distance", 5);
     public static final int ENTITY_SYNCHRONIZATION_TICKS = intProperty("minestom.entity-synchronization-ticks", 20);
     public static final int DISPATCHER_THREADS = intProperty("minestom.dispatcher-threads", 1);
+    public static final int PER_INSTANCE_DISPATCHER_THREADS = intProperty("minestom.per-instance-dispatcher-threads", 4);
     public static final int SEND_LIGHT_AFTER_BLOCK_PLACEMENT_DELAY = intProperty("minestom.send-light-after-block-placement-delay", 100);
     public static final long LOGIN_PLUGIN_MESSAGE_TIMEOUT = longProperty("minestom.login-plugin-message-timeout", 5_000);
 
