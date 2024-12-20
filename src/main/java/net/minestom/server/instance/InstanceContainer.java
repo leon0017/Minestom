@@ -90,7 +90,17 @@ public class InstanceContainer extends Instance {
     protected InstanceContainer srcInstance; // only present if this instance has been created using a copy
     private long lastBlockChangeTime; // Time at which the last block change happened (#setBlock)
 
-    public AtomicInteger instanceBasedThreadId = new AtomicInteger(); // TODO: maybe not atomic, not public
+// forkstart
+    private volatile int instanceBasedThreadId; // Only set once in ThreadDispatcher, so volatile
+
+    public void UNSAFE_setInstanceBasedThreadId(int instanceBasedThreadId) {
+        this.instanceBasedThreadId = instanceBasedThreadId;
+    }
+
+    public int getInstanceBasedThreadId() {
+        return this.instanceBasedThreadId;
+    }
+// forkend
 
     public InstanceContainer(@NotNull UUID uniqueId, @NotNull DynamicRegistry.Key<DimensionType> dimensionType) {
         this(uniqueId, dimensionType, null, dimensionType.namespace());

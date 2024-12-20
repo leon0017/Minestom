@@ -21,13 +21,15 @@ public interface ThreadProvider<T> {
         };
     }
 
+// forkstart
     static <T> @NotNull ThreadProvider<T> instanceBased() {
         return partition -> {
             Chunk chunk = (Chunk) partition;
             InstanceContainer instanceContainer = (InstanceContainer) chunk.getInstance();
-            return instanceContainer.instanceBasedThreadId.get();
+            return instanceContainer.getInstanceBasedThreadId();
         };
     }
+// forkend
 
     /**
      * Performs a server tick for all chunks based on their linked thread.

@@ -31,7 +31,9 @@ import java.util.function.IntFunction;
 public final class ThreadDispatcher<P> {
     private final ThreadProvider<P> provider;
     private final List<TickThread> threads;
+// forkstart
     private final IntFunction<? extends TickThread> threadGenerator;
+// forkend
 
     // Partition -> dispatching context
     // Defines how computation is dispatched to the threads
@@ -50,16 +52,19 @@ public final class ThreadDispatcher<P> {
     // TODO: pass instance based thread count in threadcount and use it there
     private ThreadDispatcher(ThreadProvider<P> provider, int threadCount,
                              @NotNull IntFunction<? extends TickThread> threadGenerator) {
-        this.threadGenerator = threadGenerator;
         this.provider = provider;
+// forkstart
+        this.threadGenerator = threadGenerator;
         if (ServerFlag.PER_INSTANCE_DISPATCHER_THREADS > 0) {
             threads = new CopyOnWriteArrayList<>();
-        } else {
-            TickThread[] threads = new TickThread[threadCount];
-            Arrays.setAll(threads, threadGenerator);
-            this.threads = List.of(threads);
-            this.threads.forEach(Thread::start);
+            return;
         }
+// forkend
+
+        TickThread[] threads = new TickThread[threadCount];
+        Arrays.setAll(threads, threadGenerator);
+        this.threads = List.of(threads);
+        this.threads.forEach(Thread::start);
     }
 
     /**
@@ -226,13 +231,6 @@ public final class ThreadDispatcher<P> {
     }
 
     /**
-     * TODO: comment
-     */
-    public void setupInstanceBasedThread(@NotNull InstanceContainer instanceContainer) {
-        signalUpdate(new DispatchUpdate.InstanceBasedThreadSetup<>(instanceContainer));
-    }
-
-    /**
      * Shutdowns all the {@link TickThread tick threads}.
      * <p>
      * Action is irreversible.
@@ -301,24 +299,39 @@ public final class ThreadDispatcher<P> {
         }
     }
 
+// forkstart
+    /**
+     * Setup the tick thread for the specified InstanceContainer.
+     */
+    public void setupInstanceBasedThread(@NotNull InstanceContainer instanceContainer) {
+        signalUpdate(new DispatchUpdate.InstanceBasedThreadSetup<>(instanceContainer));
+    }
+
     // TODO: thread creation leak when unloading instance containers
+
+    /**
+     * Create or assign thread for the InstanceContainer.
+     */
     private void processInstanceBasedThreadSetup(@NotNull InstanceContainer instanceContainer) {
         assert ServerFlag.PER_INSTANCE_DISPATCHER_THREADS > 0; // Method should only be called when using per instance dispatcher threads
-        assert instanceContainer.instanceBasedThreadId.get() != -1; // Already setup
+        assert instanceContainer.getInstanceBasedThreadId() != -1; // Already setup
 
         if (instanceBasedNextThreadCounter == 0 || instanceBasedNextThreadCounter % ServerFlag.PER_INSTANCE_DISPATCHER_THREADS == 0) {
             int index = threads.size();
-            instanceContainer.instanceBasedThreadId.set(index);
+            instanceContainer.UNSAFE_setInstanceBasedThreadId(index);
             TickThread tickThread = threadGenerator.apply(index);
             threads.add(tickThread);
             tickThread.start();
+            System.out.println("ASSIGNED NEW THREAD: #" + instanceContainer.getInstanceBasedThreadId());
         } else {
             // Assign the instance to the most recently created thread
-            instanceContainer.instanceBasedThreadId.set(threads.size() - 1);
+            instanceContainer.UNSAFE_setInstanceBasedThreadId(threads.size() - 1);
+            System.out.println("ASSIGNED LAST THREAD: #" + instanceContainer.getInstanceBasedThreadId());
         }
 
         instanceBasedNextThreadCounter++;
     }
+// forkend
 
     /**
      * A data structure which may contain {@link Tickable}s, and is assigned a single {@link TickThread}.

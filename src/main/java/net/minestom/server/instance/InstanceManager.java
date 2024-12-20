@@ -168,9 +168,11 @@ public final class InstanceManager {
         instance.setRegistered(true);
         this.instances.add(instance);
         var dispatcher = MinecraftServer.process().dispatcher();
+// forkstart
         if (ServerFlag.PER_INSTANCE_DISPATCHER_THREADS > 0 && instance instanceof InstanceContainer instanceContainer) {
             dispatcher.setupInstanceBasedThread(instanceContainer);
         }
+// forkend
         instance.getChunks().forEach(dispatcher::createPartition);
         InstanceRegisterEvent event = new InstanceRegisterEvent(instance);
         EventDispatcher.call(event);
