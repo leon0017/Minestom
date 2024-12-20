@@ -301,6 +301,7 @@ public final class ThreadDispatcher<P> {
         }
     }
 
+    // TODO: thread creation leak when unloading instance containers
     private void processInstanceBasedThreadSetup(@NotNull InstanceContainer instanceContainer) {
         assert ServerFlag.PER_INSTANCE_DISPATCHER_THREADS > 0; // Method should only be called when using per instance dispatcher threads
         assert instanceContainer.instanceBasedThreadId.get() != -1; // Already setup
