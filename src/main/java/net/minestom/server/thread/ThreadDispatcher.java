@@ -311,11 +311,9 @@ public final class ThreadDispatcher<P> {
             TickThread tickThread = threadGenerator.apply(index);
             threads.add(tickThread);
             tickThread.start();
-            System.out.println("CREATED TICK THREAD #" + instanceContainer.instanceBasedThreadId.get());
         } else {
             // Assign the instance to the most recently created thread
             instanceContainer.instanceBasedThreadId.set(threads.size() - 1);
-            System.out.println("SETTING LAST #" + instanceContainer.instanceBasedThreadId.get());
         }
 
         instanceBasedNextThreadCounter++;
