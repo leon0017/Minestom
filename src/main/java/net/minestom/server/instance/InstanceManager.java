@@ -129,6 +129,11 @@ public final class InstanceManager {
                 instance.getChunks().forEach(dispatcher::deletePartition);
             }
             // Unregister
+// forkstart
+            if (ServerFlag.PER_INSTANCE_DISPATCHER_THREADS > 0 && instance instanceof InstanceContainer instanceContainer) {
+                MinecraftServer.process().dispatcher().unregisterInstance(instanceContainer);
+            }
+// forkend
             instance.setRegistered(false);
             this.instances.remove(instance);
         }

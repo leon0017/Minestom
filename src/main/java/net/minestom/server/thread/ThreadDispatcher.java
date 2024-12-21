@@ -2,7 +2,9 @@ package net.minestom.server.thread;
 
 import net.minestom.server.ServerFlag;
 import net.minestom.server.Tickable;
+import net.minestom.server.instance.Chunk;
 import net.minestom.server.instance.InstanceContainer;
+import net.minestom.server.utils.validate.Check;
 import org.jctools.queues.MessagePassingQueue;
 import org.jctools.queues.MpscUnboundedArrayQueue;
 import org.jetbrains.annotations.ApiStatus;
@@ -12,7 +14,6 @@ import org.jetbrains.annotations.Unmodifiable;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntFunction;
 
 /**
@@ -46,8 +47,11 @@ public final class ThreadDispatcher<P> {
     // Requests consumed at the end of each tick
     private final MessagePassingQueue<DispatchUpdate<P>> updates = new MpscUnboundedArrayQueue<>(1024);
 
-    // TODO: comment
-    private int instanceBasedNextThreadCounter = 0;
+// forkstart
+    private static final Map<Integer, Integer> threadUsageCount = new HashMap<>();
+    private static final PriorityQueue<Integer> availableThreadSlots = new PriorityQueue<>();
+    private static final PriorityQueue<Integer> availableThreadIds = new PriorityQueue<>();
+// forkend
 
     // TODO: pass instance based thread count in threadcount and use it there
     private ThreadDispatcher(ThreadProvider<P> provider, int threadCount,
@@ -125,6 +129,7 @@ public final class ThreadDispatcher<P> {
     public synchronized void updateAndAwait(long time) {
         // Update dispatcher
         this.updates.drain(update -> {
+            System.out.println("GOT UPDATE: " + update);
             switch (update) {
                 case DispatchUpdate.PartitionLoad<P> chunkUpdate -> processLoadedPartition(chunkUpdate.partition());
                 case DispatchUpdate.PartitionUnload<P> partitionUnload ->
@@ -132,16 +137,30 @@ public final class ThreadDispatcher<P> {
                 case DispatchUpdate.ElementUpdate<P> elementUpdate ->
                         processUpdatedElement(elementUpdate.tickable(), elementUpdate.partition());
                 case DispatchUpdate.ElementRemove<P> elementRemove -> processRemovedElement(elementRemove.tickable());
+// forkstart
                 case DispatchUpdate.InstanceBasedThreadSetup<P> instanceBasedThreadSetup ->
                         processInstanceBasedThreadSetup(instanceBasedThreadSetup.instanceContainer());
+                case DispatchUpdate.InstanceBasedUnregister<P> instanceBasedUnregister ->
+                        processInstanceBasedUnregister(instanceBasedUnregister.instanceContainer());
+// forkend
                 case null, default ->
                         throw new IllegalStateException("Unknown update type: " +
                                 (update == null ? "null" : update.getClass().getSimpleName()));
             }
         });
         // Tick all partitions
+
+// forkstart
+        /* BEFORE (threads list was immutable)
         CountDownLatch latch = new CountDownLatch(threads.size());
-        for (TickThread thread : threads) thread.startTick(latch, time);
+        for (TickThread thread : threads) thread.startTick(latch, time); // <-- BEFORE
+         */
+        List<TickThread> threadSnapshot = new ArrayList<>(threads);
+        CountDownLatch latch = new CountDownLatch((int) threadSnapshot.stream().filter(Objects::nonNull).count());
+        for (TickThread thread : threadSnapshot)
+            if (thread != null)
+                thread.startTick(latch, time);
+// forkend
         try {
             latch.await();
         } catch (InterruptedException e) {
@@ -251,6 +270,9 @@ public final class ThreadDispatcher<P> {
 
     private void processLoadedPartition(P partition) {
         if (partitions.containsKey(partition)) return;
+// forkstart (don't try to load unregistered instance partitions)
+        if (partition instanceof Chunk chunk && !chunk.getInstance().isRegistered()) return;
+// forkend
         final TickThread thread = retrieveThread(partition);
         final Partition partitionEntry = new Partition(thread);
         thread.entries().add(partitionEntry);
@@ -307,29 +329,68 @@ public final class ThreadDispatcher<P> {
         signalUpdate(new DispatchUpdate.InstanceBasedThreadSetup<>(instanceContainer));
     }
 
-    // TODO: thread creation leak when unloading instance containers
+    /**
+     * Marks the tick thread that the InstanceContainer was using available for new InstanceContainers.
+     */
+    public void unregisterInstance(@NotNull InstanceContainer instanceContainer) {
+        signalUpdate(new DispatchUpdate.InstanceBasedUnregister<>(instanceContainer));
+    }
 
     /**
      * Create or assign thread for the InstanceContainer.
      */
     private void processInstanceBasedThreadSetup(@NotNull InstanceContainer instanceContainer) {
         assert ServerFlag.PER_INSTANCE_DISPATCHER_THREADS > 0; // Method should only be called when using per instance dispatcher threads
-        assert instanceContainer.getInstanceBasedThreadId() != -1; // Already setup
+        Check.isTrue(instanceContainer.getInstanceBasedThreadId() == -1, "Instance thread should not be setup yet");
 
-        if (instanceBasedNextThreadCounter == 0 || instanceBasedNextThreadCounter % ServerFlag.PER_INSTANCE_DISPATCHER_THREADS == 0) {
-            int index = threads.size();
-            instanceContainer.UNSAFE_setInstanceBasedThreadId(index);
-            TickThread tickThread = threadGenerator.apply(index);
-            threads.add(tickThread);
-            tickThread.start();
-            System.out.println("ASSIGNED NEW THREAD: #" + instanceContainer.getInstanceBasedThreadId());
+        int assignedThreadId;
+
+        if (!availableThreadSlots.isEmpty()) {
+            assignedThreadId = availableThreadSlots.poll();
+            System.out.println("REUSING THREAD SLOT: #" + assignedThreadId);
         } else {
-            // Assign the instance to the most recently created thread
-            instanceContainer.UNSAFE_setInstanceBasedThreadId(threads.size() - 1);
-            System.out.println("ASSIGNED LAST THREAD: #" + instanceContainer.getInstanceBasedThreadId());
+            Integer availableThreadId = availableThreadIds.poll();
+            assignedThreadId = availableThreadId == null ? threads.size() : availableThreadId;
+            TickThread tickThread = threadGenerator.apply(assignedThreadId);
+            if (assignedThreadId < threads.size())
+                threads.set(assignedThreadId, tickThread);
+            else
+                threads.add(tickThread);
+            tickThread.start();
+
+            System.out.println("ASSIGNED THREAD: #" + assignedThreadId + " (" + tickThread.getName() + ")");
+
+            for (int i = 0; i < ServerFlag.PER_INSTANCE_DISPATCHER_THREADS - 1; i++) // skip 1, that is what we are registering now
+                availableThreadSlots.offer(assignedThreadId);
         }
 
-        instanceBasedNextThreadCounter++;
+        threadUsageCount.merge(assignedThreadId, 1, Integer::sum);
+        instanceContainer.UNSAFE_setInstanceBasedThreadId(assignedThreadId);
+    }
+
+    private void processInstanceBasedUnregister(@NotNull InstanceContainer instanceContainer) {
+        int threadIndex = instanceContainer.getInstanceBasedThreadId();
+
+        assert ServerFlag.PER_INSTANCE_DISPATCHER_THREADS > 0; // Method should only be called when using per instance dispatcher threads
+        Check.isTrue(threadIndex != -1, "Instance thread should already be setup");
+
+        int currentUsage = threadUsageCount.merge(threadIndex, -1, Integer::sum);
+
+        if (currentUsage == 0) {
+            TickThread tickThread = threads.get(threadIndex);
+            tickThread.shutdown();
+
+            threads.set(threadIndex, null); // TODO: something better
+            threadUsageCount.remove(threadIndex);
+            availableThreadSlots.removeIf(slot -> slot == threadIndex);
+            availableThreadIds.offer(threadIndex);
+        } else if (currentUsage < ServerFlag.PER_INSTANCE_DISPATCHER_THREADS) {
+            availableThreadSlots.offer(threadIndex);
+            System.out.println("OFERRING SLOT " + threadIndex);
+            System.out.println(threadUsageCount);
+        }
+
+        instanceContainer.UNSAFE_setInstanceBasedThreadId(-1);
     }
 // forkend
 
@@ -370,7 +431,7 @@ public final class ThreadDispatcher<P> {
     sealed interface DispatchUpdate<P> permits
             DispatchUpdate.PartitionLoad, DispatchUpdate.PartitionUnload,
             DispatchUpdate.ElementUpdate, DispatchUpdate.ElementRemove,
-            DispatchUpdate.InstanceBasedThreadSetup {
+            DispatchUpdate.InstanceBasedThreadSetup, DispatchUpdate.InstanceBasedUnregister {
         record PartitionLoad<P>(@NotNull P partition) implements DispatchUpdate<P> {
         }
 
@@ -382,8 +443,12 @@ public final class ThreadDispatcher<P> {
 
         record ElementRemove<P>(@NotNull Tickable tickable) implements DispatchUpdate<P> {
         }
-
+// forkstart
         record InstanceBasedThreadSetup<P>(@NotNull InstanceContainer instanceContainer) implements DispatchUpdate<P> {
         }
+
+        record InstanceBasedUnregister<P>(@NotNull InstanceContainer instanceContainer) implements DispatchUpdate<P> {
+        }
+// forkend
     }
 }

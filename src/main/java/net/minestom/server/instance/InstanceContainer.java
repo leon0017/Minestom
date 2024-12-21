@@ -91,7 +91,7 @@ public class InstanceContainer extends Instance {
     private long lastBlockChangeTime; // Time at which the last block change happened (#setBlock)
 
 // forkstart
-    private volatile int instanceBasedThreadId; // Only set once in ThreadDispatcher, so volatile
+    private volatile int instanceBasedThreadId = -1; // Only set once in ThreadDispatcher, so volatile
 
     public void UNSAFE_setInstanceBasedThreadId(int instanceBasedThreadId) {
         this.instanceBasedThreadId = instanceBasedThreadId;
