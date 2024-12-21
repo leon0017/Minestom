@@ -48,9 +48,9 @@ public final class ThreadDispatcher<P> {
     private final MessagePassingQueue<DispatchUpdate<P>> updates = new MpscUnboundedArrayQueue<>(1024);
 
 // forkstart
-    private static final Map<Integer, Integer> threadUsageCount = new HashMap<>();
-    private static final PriorityQueue<Integer> availableThreadSlots = new PriorityQueue<>();
-    private static final PriorityQueue<Integer> availableThreadIds = new PriorityQueue<>();
+    private final Map<Integer, Integer> threadUsageCount = new HashMap<>();
+    private final PriorityQueue<Integer> availableThreadSlots = new PriorityQueue<>();
+    private final PriorityQueue<Integer> availableThreadIds = new PriorityQueue<>();
 // forkend
 
     // TODO: pass instance based thread count in threadcount and use it there
@@ -129,7 +129,6 @@ public final class ThreadDispatcher<P> {
     public synchronized void updateAndAwait(long time) {
         // Update dispatcher
         this.updates.drain(update -> {
-            System.out.println("GOT UPDATE: " + update);
             switch (update) {
                 case DispatchUpdate.PartitionLoad<P> chunkUpdate -> processLoadedPartition(chunkUpdate.partition());
                 case DispatchUpdate.PartitionUnload<P> partitionUnload ->
@@ -346,11 +345,14 @@ public final class ThreadDispatcher<P> {
         int assignedThreadId;
 
         if (!availableThreadSlots.isEmpty()) {
+            // Use already running thread with slots available
             assignedThreadId = availableThreadSlots.poll();
-            System.out.println("REUSING THREAD SLOT: #" + assignedThreadId);
         } else {
+            // To prevent threads list from leaking, use availableThreadIds for lower thread indexes
+            // that have been abandoned previously.
             Integer availableThreadId = availableThreadIds.poll();
             assignedThreadId = availableThreadId == null ? threads.size() : availableThreadId;
+
             TickThread tickThread = threadGenerator.apply(assignedThreadId);
             if (assignedThreadId < threads.size())
                 threads.set(assignedThreadId, tickThread);
@@ -358,9 +360,7 @@ public final class ThreadDispatcher<P> {
                 threads.add(tickThread);
             tickThread.start();
 
-            System.out.println("ASSIGNED THREAD: #" + assignedThreadId + " (" + tickThread.getName() + ")");
-
-            for (int i = 0; i < ServerFlag.PER_INSTANCE_DISPATCHER_THREADS - 1; i++) // skip 1, that is what we are registering now
+            for (int i = 0; i < ServerFlag.PER_INSTANCE_DISPATCHER_THREADS - 1; i++) // Skip 1, that is what we are registering now
                 availableThreadSlots.offer(assignedThreadId);
         }
 
@@ -384,10 +384,8 @@ public final class ThreadDispatcher<P> {
             threadUsageCount.remove(threadIndex);
             availableThreadSlots.removeIf(slot -> slot == threadIndex);
             availableThreadIds.offer(threadIndex);
-        } else if (currentUsage < ServerFlag.PER_INSTANCE_DISPATCHER_THREADS) {
+        } else if (currentUsage < ServerFlag.PER_INSTANCE_DISPATCHER_THREADS) { // Don't think this should ever be false?
             availableThreadSlots.offer(threadIndex);
-            System.out.println("OFERRING SLOT " + threadIndex);
-            System.out.println(threadUsageCount);
         }
 
         instanceContainer.UNSAFE_setInstanceBasedThreadId(-1);
