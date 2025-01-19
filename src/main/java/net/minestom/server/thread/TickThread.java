@@ -11,6 +11,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.locks.ReentrantLock;
@@ -29,6 +30,7 @@ public final class TickThread extends MinestomThread {
     private long tickTime;
     private long tickNum = 0;
     private final List<ThreadDispatcher.Partition> entries = new ArrayList<>();
+    public final List<Tickable> additionalTickers = new CopyOnWriteArrayList<>();
 
     public TickThread(int number) {
         super(MinecraftServer.THREAD_NAME_TICK + "-" + number);
@@ -79,6 +81,18 @@ public final class TickThread extends MinestomThread {
                 } catch (Throwable e) {
                     MinecraftServer.getExceptionManager().handleException(e);
                 }
+            }
+        }
+        for (Tickable additionalTicker : additionalTickers) {
+            if (lock.hasQueuedThreads()) {
+                lock.unlock();
+                // #acquire() callbacks should be called here
+                lock.lock();
+            }
+            try {
+                additionalTicker.tick(tickTime);
+            } catch (Throwable e) {
+                MinecraftServer.getExceptionManager().handleException(e);
             }
         }
     }
